@@ -6,21 +6,12 @@ const TARGET_VERSION = "20.21.37";
 const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
 
 (async () => {
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--disable-blink-features=AutomationControlled"],
-  });
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
 
-  const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
-  });
+  await page.goto(BASE_URL);
 
-  const page = await context.newPage();
-
-  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-
-  // 🔎 tìm version (giữ nguyên logic)
+  // 🔎 tìm version
   while (true) {
     const item = page.locator(
       `div:has(span.version:has-text("${TARGET_VERSION}"))`
@@ -40,43 +31,37 @@ const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
     }
   }
 
-  // 👉 trang /download/{id}
   await page.waitForLoadState("domcontentloaded");
-  console.log("➡️ Waiting download button...");
 
-  // 🔥 WAIT THÔNG MINH (tối đa 30s)
-  const downloadBtn = page.locator("a.button.download");
+  // 🔥 lấy data-url
+  const token = await page.locator("#detail-download-button")
+    .getAttribute("data-url");
 
-  await downloadBtn.waitFor({
-    state: "visible",
-    timeout: 30000,
-  });
+  if (!token) throw new Error("Không lấy được token");
 
-  console.log("✅ Download button appeared");
+  const downloadUrl = `https://dw.uptodown.com/dwn/${token}`;
 
-  // ⚡ click + bắt response cùng lúc
-  const [response] = await Promise.all([
-    page.waitForResponse(
-      (resp) =>
-        resp.url().includes(".apk") && resp.status() === 200,
-      { timeout: 30000 }
-    ),
-    downloadBtn.click(),
-  ]);
+  console.log("🔗 Generated URL:", downloadUrl);
 
-  const apkUrl = response.url();
-  console.log("📥 APK URL:", apkUrl);
+  // 👉 follow redirect để lấy APK
+  https.get(downloadUrl, (res) => {
+    const finalUrl = res.headers.location;
 
-  // 👉 tải file
-  const fileName = `youtube-${TARGET_VERSION}.apk`;
-  const file = fs.createWriteStream(fileName);
+    if (!finalUrl) {
+      throw new Error("Không có redirect");
+    }
 
-  https.get(apkUrl, (res) => {
-    res.pipe(file);
-    file.on("finish", () => {
-      file.close();
-      console.log("✅ Done:", fileName);
-      browser.close();
+    console.log("📥 Final APK:", finalUrl);
+
+    const file = fs.createWriteStream(`youtube-${TARGET_VERSION}.apk`);
+
+    https.get(finalUrl, (apkRes) => {
+      apkRes.pipe(file);
+      file.on("finish", () => {
+        file.close();
+        console.log("✅ Done");
+        browser.close();
+      });
     });
   });
 

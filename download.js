@@ -1,48 +1,27 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
-const https = require("https");
 
 const TARGET_VERSION = "20.21.37";
 const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
 
-// 🔥 download function (handle redirect + direct stream)
-function downloadFile(url, fileName) {
-  return new Promise((resolve, reject) => {
-    https
-      .get(url, (res) => {
-        console.log("➡️ Status:", res.statusCode);
+// 🔥 download bằng browser context (fix 404)
+async function downloadWithContext(context, url, fileName) {
+  console.log("📥 Download via browser context...");
 
-        // redirect
-        if (
-          res.statusCode >= 300 &&
-          res.statusCode < 400 &&
-          res.headers.location
-        ) {
-          console.log("➡️ Redirect:", res.headers.location);
-          resolve(downloadFile(res.headers.location, fileName));
-          return;
-        }
-
-        // direct file
-        if (res.statusCode === 200) {
-          console.log("📥 Downloading...");
-
-          const file = fs.createWriteStream(fileName);
-          res.pipe(file);
-
-          file.on("finish", () => {
-            file.close();
-            console.log("✅ Done:", fileName);
-            resolve();
-          });
-
-          return;
-        }
-
-        reject(new Error(`HTTP ${res.statusCode}`));
-      })
-      .on("error", reject);
+  const response = await context.request.get(url, {
+    headers: {
+      referer: "https://youtube.en.uptodown.com/",
+    },
   });
+
+  if (!response.ok()) {
+    throw new Error(`❌ HTTP ${response.status()}`);
+  }
+
+  const buffer = await response.body();
+  fs.writeFileSync(fileName, buffer);
+
+  console.log("✅ Download done:", fileName);
 }
 
 (async () => {
@@ -58,7 +37,7 @@ function downloadFile(url, fileName) {
 
   const page = await context.newPage();
 
-  // 🧠 bypass + hide cookie
+  // 🧠 bypass bot + remove cookie popup
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", {
       get: () => undefined,
@@ -74,10 +53,21 @@ function downloadFile(url, fileName) {
     document.head.appendChild(style);
   });
 
-  console.log("➡️ Open page");
+  console.log("➡️ Open versions page");
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
-  // 🔎 tìm version
+  // 🍪 fallback accept cookie
+  try {
+    const btn = page.locator(
+      'button:has-text("Accept"), button:has-text("Accept all")'
+    );
+    if (await btn.isVisible({ timeout: 5000 })) {
+      console.log("🍪 Accept cookies...");
+      await btn.click();
+    }
+  } catch {}
+
+  // 🔎 tìm version + click more
   while (true) {
     const item = page.locator(
       `div:has(span.version:has-text("${TARGET_VERSION}"))`
@@ -92,16 +82,18 @@ function downloadFile(url, fileName) {
     const more = page.locator("#button-list-more .more");
 
     if (await more.isVisible()) {
-      console.log("➡️ Click more...");
+      console.log("➡️ Click See more...");
       await more.click();
       await page.waitForTimeout(1200);
     } else {
-      throw new Error("Không tìm thấy version");
+      throw new Error("❌ Không tìm thấy version");
     }
   }
 
-  // 👉 trang download
+  // 👉 vào trang download/{id}
   await page.waitForLoadState("domcontentloaded");
+
+  console.log("⏳ Waiting download button...");
 
   const btn = page.locator("#detail-download-button");
 
@@ -112,18 +104,21 @@ function downloadFile(url, fileName) {
 
   console.log("✅ Button ready");
 
+  // 🔥 lấy token
   const token = await btn.getAttribute("data-url");
 
   if (!token) {
-    throw new Error("Không lấy được token");
+    throw new Error("❌ Không lấy được token");
   }
 
   const downloadUrl = `https://dw.uptodown.com/dwn/${token}`;
-  console.log("🔗", downloadUrl);
 
+  console.log("🔗 Token URL:", downloadUrl);
+
+  // 📥 tải APK (fix 404 bằng context)
   const fileName = `youtube-${TARGET_VERSION}.apk`;
 
-  await downloadFile(downloadUrl, fileName);
+  await downloadWithContext(context, downloadUrl, fileName);
 
   await browser.close();
 })();

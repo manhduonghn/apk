@@ -1,65 +1,129 @@
-const { chromium } = require("playwright");
+const https = require("https");
 const fs = require("fs");
 
 const TARGET_VERSION = "20.21.37";
-const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
+const BASE = "https://youtube.en.uptodown.com/android";
+
+// helper request
+function fetch(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(
+        url,
+        {
+          headers: {
+            "user-agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            accept: "*/*",
+            "accept-language": "en-US,en;q=0.9",
+            ...headers,
+          },
+        },
+        (res) => {
+          let data = [];
+          res.on("data", (c) => data.push(c));
+          res.on("end", () => {
+            resolve({
+              status: res.statusCode,
+              headers: res.headers,
+              body: Buffer.concat(data).toString(),
+            });
+          });
+        }
+      )
+      .on("error", reject);
+  });
+}
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    acceptDownloads: true, // 🔥 QUAN TRỌNG
-  });
+  console.log("➡️ Fetch first page...");
 
-  const page = await context.newPage();
+  // 👉 1. load trang versions
+  let html = (await fetch(`${BASE}/versions`)).body;
 
-  await page.goto(BASE_URL);
+  let versionId = null;
 
-  // 🔎 tìm version
+  // 👉 2. loop tìm version + load more
   while (true) {
-    const item = page.locator(
-      `div:has(span.version:has-text("${TARGET_VERSION}"))`
-    );
+    // tìm block có version
+    const regex =
+      /data-version-id="(\d+)"[\s\S]*?<span class="version">([^<]+)<\/span>/g;
 
-    if ((await item.count()) > 0) {
-      console.log("✅ Found version");
-      await item.first().click({ force: true });
-      break;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const id = match[1];
+      const ver = match[2].trim();
+
+      if (ver === TARGET_VERSION) {
+        versionId = id;
+        console.log("✅ Found versionId:", versionId);
+        break;
+      }
     }
 
-    const more = page.locator("#button-list-more .more");
-    if (await more.isVisible()) {
-      await more.click();
-      await page.waitForTimeout(1000);
-    } else {
-      throw new Error("Không tìm thấy version");
+    if (versionId) break;
+
+    // 👉 tìm "See more"
+    const moreMatch = html.match(/id="button-list-more"[^>]*data-url="([^"]*)"/);
+
+    if (!moreMatch || !moreMatch[1]) {
+      throw new Error("❌ Không tìm thấy version");
     }
+
+    const moreUrl = moreMatch[1];
+    console.log("➡️ Load more:", moreUrl);
+
+    const moreRes = await fetch(moreUrl, {
+      referer: `${BASE}/versions`,
+    });
+
+    html += moreRes.body; // append thêm dữ liệu
   }
 
-  await page.waitForLoadState("domcontentloaded");
+  // 👉 3. vào trang download
+  const pageUrl = `${BASE}/download/${versionId}`;
 
-  const btn = page.locator("#detail-download-button");
-  await btn.waitFor({ state: "attached" });
+  console.log("➡️ Fetch download page...");
+  const page = await fetch(pageUrl, {
+    referer: `${BASE}/versions`,
+  });
 
-  const token = await btn.getAttribute("data-url");
+  // 👉 4. lấy token
+  const tokenMatch = page.body.match(/data-url="([^"]+)"/);
+
+  if (!tokenMatch) throw new Error("❌ Không lấy được token");
+
+  const token = tokenMatch[1];
 
   const dwnUrl = `https://dw.uptodown.com/dwn/${token}`;
 
-  console.log("➡️ Trigger download:", dwnUrl);
+  console.log("🔗 Token URL:", dwnUrl);
 
-  // 🔥 KEY FIX: bắt event download
-  const [download] = await Promise.all([
-    page.waitForEvent("download"),
-    page.evaluate((url) => {
-      window.location.href = url;
-    }, dwnUrl),
-  ]);
+  // 👉 5. tải file
+  const res = await fetch(dwnUrl, {
+    referer: pageUrl,
+  });
 
-  const fileName = `youtube-${TARGET_VERSION}.apk`;
+  // redirect
+  if (res.status >= 300 && res.status < 400 && res.headers.location) {
+    console.log("➡️ Redirect:", res.headers.location);
 
-  const path = await download.path();
-  fs.copyFileSync(path, fileName);
+    const final = await fetch(res.headers.location);
+    const fileName = `youtube-${TARGET_VERSION}.apk`;
 
-  console.log("✅ Download done:", fileName);
+    fs.writeFileSync(fileName, final.body);
+    console.log("✅ Done:", fileName);
+    return;
+  }
 
-  await browser.close();
+  // direct
+  if (res.status === 200) {
+    const fileName = `youtube-${TARGET_VERSION}.apk`;
+
+    fs.writeFileSync(fileName, res.body);
+    console.log("✅ Done:", fileName);
+    return;
+  }
+
+  throw new Error(`❌ HTTP ${res.status}`);
 })();

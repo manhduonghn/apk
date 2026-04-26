@@ -35,12 +35,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: 📦 Install dependencies
-        run: npm install
-
-      - name: 🎭 Install Playwright browsers
-        run: npx playwright install --with-deps
-
       - name: 🚀 Run script
         run: node download.js
 

@@ -7,80 +7,83 @@ const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
 
 (async () => {
   const browser = await chromium.launch({
-    headless: true, // đổi false nếu muốn xem browser
+    headless: true,
+    args: ["--disable-blink-features=AutomationControlled"],
   });
 
-  const page = await browser.newPage();
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+  });
+
+  const page = await context.newPage();
 
   console.log("➡️ Opening versions page...");
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
   let found = false;
-  let versionElement;
 
-  console.log(`🔍 Searching for version ${TARGET_VERSION}...`);
+  console.log(`🔍 Searching version ${TARGET_VERSION}...`);
 
   while (!found) {
-    // tìm version trong DOM
-    versionElement = await page.locator(
+    const versionItem = page.locator(
       `div:has(span.version:has-text("${TARGET_VERSION}"))`
     );
 
-    if ((await versionElement.count()) > 0) {
+    if ((await versionItem.count()) > 0) {
+      console.log("✅ Found version!");
+      await versionItem.first().click();
       found = true;
       break;
     }
 
-    // nếu chưa có -> click "See more"
-    const seeMoreBtn = page.locator("#button-list-more .more");
+    const seeMore = page.locator("#button-list-more .more");
 
-    if (await seeMoreBtn.isVisible()) {
-      console.log("➡️ Clicking 'See more'...");
-      await seeMoreBtn.click();
-
-      // chờ load thêm
+    if (await seeMore.isVisible()) {
+      console.log("➡️ Click See more...");
+      await seeMore.click();
       await page.waitForTimeout(1500);
     } else {
-      throw new Error("❌ Không tìm thấy version và không còn nút 'See more'");
+      throw new Error("❌ Không tìm thấy version");
     }
   }
 
-  console.log("✅ Found version!");
-
-  // click vào item version
-  await versionElement.first().click();
-
-  // chờ sang trang download
+  // 👉 đang ở trang /download/{id}
   await page.waitForLoadState("domcontentloaded");
+  console.log("➡️ On download info page");
 
-  console.log("➡️ Opening download page...");
+  // ⚡ click nút DOWNLOAD thật
+  // Uptodown thường có nút dạng:
+  // a.button.download hoặc a[data-url*="download"]
+  const realDownloadBtn = page.locator(
+    'a.button.download, a[href*="/download/"]'
+  );
 
-  // nút download chính
-  const downloadBtn = page.locator('a[href*="download"]');
+  await realDownloadBtn.first().waitFor({ timeout: 10000 });
+  console.log("➡️ Click download button...");
+  await realDownloadBtn.first().click();
 
-  await downloadBtn.first().click();
+  // ⚡ bắt request file APK
+  console.log("⏳ Waiting APK response...");
 
-  // chờ redirect tới link APK thật
-  await page.waitForEvent("download").catch(() => {});
+  const response = await page.waitForResponse((resp) => {
+    const url = resp.url();
+    return url.includes(".apk") && resp.status() === 200;
+  }, { timeout: 20000 });
 
-  // fallback: lấy link trực tiếp
-  const apkUrl = await page.locator("a.button.download").getAttribute("href");
-
-  if (!apkUrl) {
-    throw new Error("❌ Không lấy được link APK");
-  }
+  const apkUrl = response.url();
 
   console.log("📥 APK URL:", apkUrl);
 
-  // tải file
+  // 👉 tải file
   const fileName = `youtube-${TARGET_VERSION}.apk`;
   const file = fs.createWriteStream(fileName);
 
-  https.get(apkUrl, (response) => {
-    response.pipe(file);
+  https.get(apkUrl, (res) => {
+    res.pipe(file);
     file.on("finish", () => {
       file.close();
-      console.log("✅ Download completed:", fileName);
+      console.log("✅ Download done:", fileName);
       browser.close();
     });
   });

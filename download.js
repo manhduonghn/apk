@@ -9,57 +9,68 @@ const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
 
-  await page.goto(BASE_URL);
+  console.log("➡️ Open versions page");
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
 
-  // 🔎 tìm version
+  // 🔎 tìm version + click more
   while (true) {
     const item = page.locator(
       `div:has(span.version:has-text("${TARGET_VERSION}"))`
     );
 
     if ((await item.count()) > 0) {
+      console.log("✅ Found version");
       await item.first().click();
       break;
     }
 
     const more = page.locator("#button-list-more .more");
+
     if (await more.isVisible()) {
+      console.log("➡️ Click See more...");
       await more.click();
       await page.waitForTimeout(1500);
     } else {
-      throw new Error("Không tìm thấy version");
+      throw new Error("❌ Không tìm thấy version");
     }
   }
 
+  // 👉 trang download/{id}
   await page.waitForLoadState("domcontentloaded");
 
-  // 🔥 lấy data-url
-  const token = await page.locator("#detail-download-button")
-    .getAttribute("data-url");
+  console.log("⏳ Wait button...");
 
-  if (!token) throw new Error("Không lấy được token");
+  // ⚡ đợi button attach (không cần visible)
+  const btn = page.locator("#detail-download-button");
+  await btn.waitFor({ state: "attached", timeout: 30000 });
+
+  // 🔥 lấy token
+  const token = await btn.getAttribute("data-url");
+
+  if (!token) throw new Error("❌ Không có token");
 
   const downloadUrl = `https://dw.uptodown.com/dwn/${token}`;
+  console.log("🔗 Token URL:", downloadUrl);
 
-  console.log("🔗 Generated URL:", downloadUrl);
-
-  // 👉 follow redirect để lấy APK
+  // 👉 follow redirect → APK thật
   https.get(downloadUrl, (res) => {
     const finalUrl = res.headers.location;
 
     if (!finalUrl) {
-      throw new Error("Không có redirect");
+      throw new Error("❌ Không redirect ra APK");
     }
 
     console.log("📥 Final APK:", finalUrl);
 
-    const file = fs.createWriteStream(`youtube-${TARGET_VERSION}.apk`);
+    const file = fs.createWriteStream(
+      `youtube-${TARGET_VERSION}.apk`
+    );
 
     https.get(finalUrl, (apkRes) => {
       apkRes.pipe(file);
       file.on("finish", () => {
         file.close();
-        console.log("✅ Done");
+        console.log("✅ Download done");
         browser.close();
       });
     });

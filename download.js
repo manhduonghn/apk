@@ -5,7 +5,7 @@ const TARGET_VERSION = "20.21.37";
 const BASE = "https://youtube.en.uptodown.com/android";
 
 // helper
-function fetch(url, headers = {}) {
+function fetch(url, headers = {}, isBinary = false) {
   return new Promise((resolve, reject) => {
     https
       .get(
@@ -21,12 +21,15 @@ function fetch(url, headers = {}) {
         },
         (res) => {
           let data = [];
+
           res.on("data", (c) => data.push(c));
           res.on("end", () => {
+            const buffer = Buffer.concat(data);
+
             resolve({
               status: res.statusCode,
               headers: res.headers,
-              body: Buffer.concat(data).toString(),
+              body: isBinary ? buffer : buffer.toString(),
             });
           });
         }
@@ -36,18 +39,17 @@ function fetch(url, headers = {}) {
 }
 
 (async () => {
-  // 🔥 1. lấy appCode từ /versions
+  // 🔥 1. lấy appCode
   console.log("➡️ Fetch versions page...");
   const html = (await fetch(`${BASE}/versions`)).body;
 
   const codeMatch = html.match(/id="detail-app-name"[^>]*data-code="(\d+)"/);
-
   if (!codeMatch) throw new Error("❌ Không lấy được appCode");
 
   const appCode = codeMatch[1];
   console.log("✅ appCode:", appCode);
 
-  // 🔎 2. tìm versionId qua API
+  // 🔎 2. tìm versionId
   let page = 1;
   let versionId = null;
 
@@ -71,11 +73,10 @@ function fetch(url, headers = {}) {
     }
 
     if (versionId) break;
-
     page++;
   }
 
-  // 🔥 3. vào trang download để lấy token
+  // 🔥 3. lấy token đúng
   const pageUrl = `${BASE}/download/${versionId}`;
   console.log("➡️ Fetch download page...");
 
@@ -83,8 +84,17 @@ function fetch(url, headers = {}) {
     referer: `${BASE}/versions`,
   });
 
-  const tokenMatch = pageRes.body.match(/data-url="([^"]+)"/);
-  if (!tokenMatch) throw new Error("❌ Không lấy được token");
+  const htmlDownload = pageRes.body;
+
+  // ✅ FIX CHÍNH Ở ĐÂY
+  const tokenMatch = htmlDownload.match(
+    /id="detail-download-button"[^>]*data-url="([^"]+)"/
+  );
+
+  if (!tokenMatch) {
+    console.log(htmlDownload.slice(0, 2000)); // debug
+    throw new Error("❌ Không lấy được token");
+  }
 
   const token = tokenMatch[1];
 
@@ -94,21 +104,26 @@ function fetch(url, headers = {}) {
   // 🔥 4. tải file
   const fileName = `youtube-${TARGET_VERSION.replace(/\./g, "-")}.apk`;
 
-  const res = await fetch(dwnUrl, {
-    referer: pageUrl,
-  });
+  const res = await fetch(
+    dwnUrl,
+    {
+      referer: pageUrl,
+      accept: "*/*",
+    },
+    true // 👈 binary
+  );
 
   // redirect
   if (res.status >= 300 && res.status < 400 && res.headers.location) {
     console.log("➡️ Redirect:", res.headers.location);
 
-    const final = await fetch(res.headers.location);
+    const final = await fetch(res.headers.location, {}, true);
     fs.writeFileSync(fileName, final.body);
     console.log("✅ Done:", fileName);
     return;
   }
 
-  // direct
+  // direct file
   if (res.status === 200) {
     fs.writeFileSync(fileName, res.body);
     console.log("✅ Done:", fileName);

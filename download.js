@@ -1,65 +1,115 @@
-const { chromium } = require("playwright");
+const https = require("https");
 const fs = require("fs");
 
 const TARGET_VERSION = "20.21.37";
-const BASE_URL = "https://youtube.en.uptodown.com/android/versions";
+const APP_CODE = "16906";
+const BASE = "https://youtube.en.uptodown.com/android";
+
+// helper request
+function fetch(url, headers = {}) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(
+        url,
+        {
+          headers: {
+            "user-agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+            accept: "*/*",
+            "accept-language": "en-US,en;q=0.9",
+            ...headers,
+          },
+        },
+        (res) => {
+          let data = [];
+          res.on("data", (c) => data.push(c));
+          res.on("end", () => {
+            resolve({
+              status: res.statusCode,
+              headers: res.headers,
+              body: Buffer.concat(data),
+            });
+          });
+        }
+      )
+      .on("error", reject);
+  });
+}
 
 (async () => {
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
-    acceptDownloads: true, // 🔥 QUAN TRỌNG
-  });
+  let page = 1;
+  let versionId = null;
 
-  const page = await context.newPage();
+  console.log("➡️ Find versionId via API...");
 
-  await page.goto(BASE_URL);
-
-  // 🔎 tìm version
+  // 🔎 loop pages
   while (true) {
-    const item = page.locator(
-      `div:has(span.version:has-text("${TARGET_VERSION}"))`
-    );
+    const apiUrl = `${BASE}/apps/${APP_CODE}/versions/${page}`;
 
-    if ((await item.count()) > 0) {
-      console.log("✅ Found version");
-      await item.first().click({ force: true });
-      break;
+    console.log("➡️ Page", page);
+
+    const res = await fetch(apiUrl);
+    const json = JSON.parse(res.body.toString());
+
+    if (!json.data || json.data.length === 0) {
+      throw new Error("❌ Không tìm thấy version");
     }
 
-    const more = page.locator("#button-list-more .more");
-    if (await more.isVisible()) {
-      await more.click();
-      await page.waitForTimeout(1000);
-    } else {
-      throw new Error("Không tìm thấy version");
+    for (const item of json.data) {
+      if (item.version === TARGET_VERSION && item.kindFile === "apk") {
+        versionId = item.versionURL.versionID;
+        console.log("✅ Found versionId:", versionId);
+        break;
+      }
     }
+
+    if (versionId) break;
+
+    page++;
   }
 
-  await page.waitForLoadState("domcontentloaded");
+  // 👉 load trang download
+  const pageUrl = `${BASE}/download/${versionId}`;
+  console.log("➡️ Fetch download page...");
 
-  const btn = page.locator("#detail-download-button");
-  await btn.waitFor({ state: "attached" });
+  const pageRes = await fetch(pageUrl, {
+    referer: `${BASE}/versions`,
+  });
 
-  const token = await btn.getAttribute("data-url");
+  const html = pageRes.body.toString();
+
+  // 👉 lấy token
+  const match = html.match(/data-url="([^"]+)"/);
+  if (!match) throw new Error("❌ Không lấy được token");
+
+  const token = match[1];
 
   const dwnUrl = `https://dw.uptodown.com/dwn/${token}`;
+  console.log("🔗 Token URL:", dwnUrl);
 
-  console.log("➡️ Trigger download:", dwnUrl);
+  // 👉 tải file
+  const fileName = `youtube-${TARGET_VERSION.replace(/\./g, "-")}.apk`;
 
-  // 🔥 KEY FIX: bắt event download
-  const [download] = await Promise.all([
-    page.waitForEvent("download"),
-    page.evaluate((url) => {
-      window.location.href = url;
-    }, dwnUrl),
-  ]);
+  const res = await fetch(dwnUrl, {
+    referer: pageUrl,
+  });
 
-  const fileName = `youtube-${TARGET_VERSION}.apk`;
+  // redirect
+  if (res.status >= 300 && res.status < 400 && res.headers.location) {
+    console.log("➡️ Redirect:", res.headers.location);
 
-  const path = await download.path();
-  fs.copyFileSync(path, fileName);
+    const final = await fetch(res.headers.location);
+    fs.writeFileSync(fileName, final.body);
+    console.log("✅ Done:", fileName);
+    return;
+  }
 
-  console.log("✅ Download done:", fileName);
+  // direct
+  if (res.status === 200) {
+    fs.writeFileSync(fileName, res.body);
+    console.log("✅ Done:", fileName);
+    return;
+  }
 
-  await browser.close();
+  throw new Error(`❌ HTTP ${res.status}`);
 })();

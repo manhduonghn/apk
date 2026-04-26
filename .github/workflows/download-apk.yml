@@ -1,89 +1,52 @@
-name: Download YouTube APK
+name: Uptodown APK Downloader
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'YouTube APK version'
-        required: false
-        default: '20.21.37'
-        type: string
   schedule:
-    - cron: '0 0 * * *'
+    - cron: "*/10 * * * *" # chạy mỗi 10 phút
 
 jobs:
-  download-apk:
+  download:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-    
-    - name: Install system dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          libx11-xcb1 \
-          libxcomposite1 \
-          libxcursor1 \
-          libxdamage1 \
-          libxi6 \
-          libxtst6 \
-          libnss3 \
-          libcups2 \
-          libxss1 \
-          libxrandr2 \
-          libasound2 \
-          libatk-bridge2.0-0 \
-          libgtk-3-0 \
-          libgbm1
-    
-    - name: Install dependencies
-      run: |
-        npm ci
-        npx playwright install chromium
-        npx playwright install-deps
-    
-    - name: Create download directory
-      run: mkdir -p downloads
-    
-    - name: Download YouTube APK
-      run: node download-youtube.js
-      env:
-        TARGET_VERSION: ${{ inputs.version || '20.21.37' }}
-        PLAYWRIGHT_BROWSERS_PATH: 0
-    
-    - name: Find and list APK files
-      run: |
-        find . -name "*.apk" -type f
-        ls -la downloads/ || echo "No files in downloads"
-        if ls *.apk 1> /dev/null 2>&1; then
-          echo "APK_FOUND=true" >> $GITHUB_ENV
-        elif ls downloads/*.apk 1> /dev/null 2>&1; then
-          echo "APK_FOUND=true" >> $GITHUB_ENV
-        else
-          echo "APK_FOUND=false" >> $GITHUB_ENV
-        fi
-    
-    - name: Upload APK as artifact
-      if: env.APK_FOUND == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: youtube-apk-${{ github.run_id }}
-        path: |
-          *.apk
-          downloads/*.apk
-        retention-days: 30
-        compression-level: 0
-    
-    - name: Check if APK exists
-      if: env.APK_FOUND == 'false'
-      run: |
-        echo "No APK file found"
-        exit 1
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      # ⚡ Cache node_modules
+      - name: 📦 Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      # ⚡ Cache Playwright browsers
+      - name: 🌐 Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+
+      - name: 🟢 Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: 🎭 Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: 🚀 Run script
+        run: node download.js
+
+      # 📤 Upload APK artifact
+      - name: 📤 Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-files
+          path: "*.apk"

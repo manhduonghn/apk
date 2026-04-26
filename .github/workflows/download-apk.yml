@@ -1,7 +1,6 @@
 name: Download YouTube APK
 
 on:
-  # Chạy thủ công từ GitHub UI
   workflow_dispatch:
     inputs:
       version:
@@ -9,14 +8,8 @@ on:
         required: false
         default: '20.21.37'
         type: string
-  
-  # Tự động chạy mỗi ngày lúc 00:00 (tùy chọn)
   schedule:
     - cron: '0 0 * * *'
-  
-  # Hoặc chạy khi push lên main branch
-  # push:
-  #   branches: [ main ]
 
 jobs:
   download-apk:
@@ -32,6 +25,25 @@ jobs:
         node-version: '20'
         cache: 'npm'
     
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libx11-xcb1 \
+          libxcomposite1 \
+          libxcursor1 \
+          libxdamage1 \
+          libxi6 \
+          libxtst6 \
+          libnss3 \
+          libcups2 \
+          libxss1 \
+          libxrandr2 \
+          libasound2 \
+          libatk-bridge2.0-0 \
+          libgtk-3-0 \
+          libgbm1
+    
     - name: Install dependencies
       run: |
         npm ci
@@ -45,11 +57,22 @@ jobs:
       run: node download-youtube.js
       env:
         TARGET_VERSION: ${{ inputs.version || '20.21.37' }}
+        PLAYWRIGHT_BROWSERS_PATH: 0
     
-    - name: List downloaded files
-      run: ls -la downloads/ || ls -la *.apk 2>/dev/null || echo "No APK files found"
+    - name: Find and list APK files
+      run: |
+        find . -name "*.apk" -type f
+        ls -la downloads/ || echo "No files in downloads"
+        if ls *.apk 1> /dev/null 2>&1; then
+          echo "APK_FOUND=true" >> $GITHUB_ENV
+        elif ls downloads/*.apk 1> /dev/null 2>&1; then
+          echo "APK_FOUND=true" >> $GITHUB_ENV
+        else
+          echo "APK_FOUND=false" >> $GITHUB_ENV
+        fi
     
     - name: Upload APK as artifact
+      if: env.APK_FOUND == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: youtube-apk-${{ github.run_id }}
@@ -60,30 +83,7 @@ jobs:
         compression-level: 0
     
     - name: Check if APK exists
-      id: check_apk
+      if: env.APK_FOUND == 'false'
       run: |
-        if ls *.apk 1> /dev/null 2>&1 || ls downloads/*.apk 1> /dev/null 2>&1; then
-          echo "apk_exists=true" >> $GITHUB_OUTPUT
-          echo "APK file found successfully"
-        else
-          echo "apk_exists=false" >> $GITHUB_OUTPUT
-          echo "No APK file found"
-          exit 1
-        fi
-    
-    - name: Upload to release (optional)
-      if: success() && github.event_name == 'workflow_dispatch'
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: youtube-apk-${{ github.run_number }}
-        name: YouTube APK v${{ inputs.version || '20.21.37' }}
-        body: |
-          YouTube APK version ${{ inputs.version || '20.21.37' }}
-          Downloaded on ${{ github.event.repository.updated_at }}
-        files: |
-          *.apk
-          downloads/*.apk
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        echo "No APK file found"
+        exit 1

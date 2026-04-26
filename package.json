@@ -1,0 +1,16 @@
+{
+  "name": "youtube-apk-downloader",
+  "version": "1.0.0",
+  "description": "Download YouTube APK version 20.21.37 from Uptodown",
+  "main": "download-youtube.js",
+  "scripts": {
+    "start": "node download-youtube.js",
+    "download": "node download-youtube.js"
+  },
+  "keywords": ["youtube", "apk", "download", "uptodown", "playwright"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
